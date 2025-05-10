@@ -1,121 +1,121 @@
-//Date helper function
+// Helper to format date
 function formatToDDMMYYYY(isoString) {
   const date = new Date(isoString);
-
   const day = String(date.getUTCDate()).padStart(2, '0');
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0'); // Months are 0-based
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
   const year = date.getUTCFullYear();
-
   return `${day}/${month}/${year}`;
 }
 
-async function manageCoin() {
-    const inputName = document.getElementById("searchInput").value.trim();
-    if (!inputName) {
-        alert("Please enter a coin name");
-        return;
-    }
+let coinRows = [];
+let sortDirection = {
+  price: 'desc',
+  marketCap: 'desc'
+};
 
-    try {
-        // Fetch market data using GET
-        const response = await fetch(`http://localhost:8080/manageCoin?name=${encodeURIComponent(inputName)}`);
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(errorText || "Failed to fetch coin data");
-        }
+document.getElementById('sortPrice').addEventListener('click', () => {
+  sortDirection.price = sortDirection.price === 'asc' ? 'desc' : 'asc';
+  updateSortIndicators();
+  sortAndRenderTable('current_price', sortDirection.price);
+});
 
-        const coinData = await response.json();
-        if (!coinData || Object.keys(coinData).length === 0) {
-            throw new Error("Coin not found or returned empty data");
-        }
+document.getElementById('sortMarketCap').addEventListener('click', () => {
+  sortDirection.marketCap = sortDirection.marketCap === 'asc' ? 'desc' : 'asc';
+  updateSortIndicators();
+  sortAndRenderTable('market_cap', sortDirection.marketCap);
+});
 
-        renderTableRow(coinData);
+function updateSortIndicators() {
+  const priceHeader = document.getElementById('sortPrice');
+  const capHeader = document.getElementById('sortMarketCap');
 
-    } catch (err) {
-        console.error("Error:", err.message);
-        alert("Error: " + err.message);
-    }
+  priceHeader.textContent = `Price ${sortDirection.price === 'asc' ? '↑' : '↓'}`;
+  capHeader.textContent = `Market Cap ${sortDirection.marketCap === 'asc' ? '↑' : '↓'}`;
 }
 
+function sortAndRenderTable(key, direction) {
+  const sorted = [...coinRows].sort((a, b) => {
+    return direction === 'asc' ? a[key] - b[key] : b[key] - a[key];
+  });
 
-function renderTableRow(coin) {
-    const tableBody = document.getElementById("coinTableBody");
+  renderSortedTable(sorted);
+}
 
-    // Remove existing row with the same coin name (if any)
-    const existingRows = tableBody.querySelectorAll("tr");
-    existingRows.forEach(row => {
-        const nameCell = row.cells[2]; // 3rd cell is the coin name
-        if (nameCell && nameCell.textContent === coin.name) {
-            tableBody.removeChild(row);
-        }
-    });
+function renderSortedTable(data) {
+  const tableBody = document.getElementById("coinTableBody");
+  tableBody.innerHTML = ''; // Clear table
 
-    // Create and append the new row
+  data.forEach(coin => {
     const row = document.createElement("tr");
     row.innerHTML = `
-        <td><img src="${coin.image}" alt="${coin.name}" width="32" height="32"></td>
-        <td>${coin.id}</td>
-        <td>${coin.name}</td>
-        <td>${coin.symbol.toUpperCase()}</td>
-        <td>€${coin.current_price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
-        <td>€${coin.market_cap.toLocaleString()}</td>
-        <td>${formatToDDMMYYYY(coin.last_updated)}</td>
+      <td><img src="${coin.image}" alt="${coin.name}" width="32" height="32"></td>
+      <td>${coin.id}</td>
+      <td>${coin.name}</td>
+      <td>${coin.symbol.toUpperCase()}</td>
+      <td>€${coin.current_price.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>
+      <td>€${coin.market_cap.toLocaleString()}</td>
+      <td>${formatToDDMMYYYY(coin.last_updated)}</td>
+      <td><button class="btn btn-primary btn-sm ms-2 view-details-btn">View Details</button></td>
     `;
+    
+    const viewBtn = row.querySelector(".view-details-btn");
+    viewBtn.addEventListener("click", () => {
+      showCoinDetailsModal(coin);
+    });
 
     tableBody.appendChild(row);
+  });
 }
 
+function showCoinDetailsModal(coin) {
+  const modalBody = document.getElementById("modalBodyContent");
+  modalBody.innerHTML = `
+    <p><strong>Price Change (24h):</strong> €${coin.price_change_24h.toFixed(2)}</p>
+    <p><strong>Price Change % (24h):</strong> ${coin.price_change_percentage_24h.toFixed(2)}%</p>
+    <p><strong>Market Cap Change (24h):</strong> €${coin.market_cap_change_24h.toLocaleString()}</p>
+    <p><strong>Market Cap Change % (24h):</strong> ${coin.market_cap_change_percentage_24h.toFixed(2)}%</p>
+  `;
 
-// async function getMookCoinData() {
-//     const inputName = document.getElementById("searchInput").value.trim().toLowerCase();
-//     if (!inputName) {
-//         alert("Please enter a coin name");
-//         return;
-//     }
+  const modal = new bootstrap.Modal(document.getElementById('coinDetailsModal'));
+  modal.show();
+}
 
-//     // Hardcoded coin data
-//     const hardcodedData = [
-//         {
-//             id: "bitcoin",
-//             symbol: "btc",
-//             name: "Bitcoin",
-//             image: "https://coin-images.coingecko.com/coins/images/1/large/bitcoin.png?1696501400",
-//             current_price: 87626,
-//             market_cap: 1749637200915,
-//             market_cap_rank: 1,
-//             fully_diluted_valuation: 1749637200915,
-//             total_volume: 26949421028,
-//             high_24h: 87516,
-//             low_24h: 84550,
-//             price_change_24h: 2550.01,
-//             price_change_percentage_24h: 2.99732,
-//             market_cap_change_24h: 60038895947,
-//             market_cap_change_percentage_24h: 3.55344,
-//             circulating_supply: 19861703,
-//             total_supply: 19861703,
-//             max_supply: 21000000,
-//             ath: 105495,
-//             ath_change_percentage: -17.14902,
-//             ath_date: "2025-01-20T07:16:25.271Z",
-//             atl: 51.3,
-//             atl_change_percentage: 170282.91198,
-//             atl_date: "2013-07-05T00:00:00.000Z",
-//             roi: null,
-//             last_updated: "2025-05-08T04:10:38.829Z"
-//         }
-//     ];
+async function manageCoin() {
+  const inputName = document.getElementById("searchInput").value.trim();
+  if (!inputName) {
+    alert("Please enter a coin name");
+    return;
+  }
 
-//     try {
-//         // Simulate searching for the coin
-//         const coinData = hardcodedData.filter(coin => coin.name.toLowerCase() === inputName);
-//         if (coinData.length === 0) {
-//             throw new Error("Coin not found");
-//         }
+  try {
+    const response = await fetch(`http://localhost:8080/manageCoin?name=${encodeURIComponent(inputName)}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(errorText || "Failed to fetch coin data");
+    }
 
-//         console.log("Fetched coin data (hardcoded):", coinData[0]);
-//         insertCoinData(coinData[0]);
-//     } catch (err) {
-//         console.error("Error fetching coin data:", err.message);
-//         alert(err.message);
-//     }
-// }
+    const coinData = await response.json();
+    if (!coinData || Object.keys(coinData).length === 0) {
+      throw new Error("Coin not found or returned empty data");
+    }
+
+    renderTableRow(coinData);
+
+  } catch (err) {
+    console.error("Error:", err.message);
+    alert("Error: " + err.message);
+  }
+}
+
+function renderTableRow(coin) {
+  coinRows = coinRows.filter(c => c.name !== coin.name);
+  coinRows.push(coin);
+
+  if (sortDirection.price || sortDirection.marketCap) {
+    const key = sortDirection.price ? 'current_price' : 'market_cap';
+    const direction = sortDirection.price || sortDirection.marketCap;
+    sortAndRenderTable(key, direction);
+  } else {
+    renderSortedTable(coinRows);
+  }
+}

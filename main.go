@@ -31,15 +31,21 @@ type Coin struct {
 	MarketCapChangePct24h    float64   `json:"market_cap_change_percentage_24h"`
 	CirculatingSupply        float64   `json:"circulating_supply"`
 	TotalSupply              float64   `json:"total_supply"`
-	MaxSupply                *float64  `json:"max_supply"` // nullable
+	MaxSupply                *float64  `json:"max_supply"`
 	Ath                      float64   `json:"ath"`
 	AthChangePercentage      float64   `json:"ath_change_percentage"`
 	AthDate                  time.Time `json:"ath_date"`
 	Atl                      float64   `json:"atl"`
 	AtlChangePercentage      float64   `json:"atl_change_percentage"`
 	AtlDate                  time.Time `json:"atl_date"`
-	Roi                      *string   `json:"roi"` // raw JSON string or null
+	Roi                      *Roi      `json:"roi"`
 	LastUpdated              time.Time `json:"last_updated"`
+}
+
+type Roi struct {
+	Times      float64 `json:"times"`
+	Currency   string  `json:"currency"`
+	Percentage float64 `json:"percentage"`
 }
 
 func getCoinIDByRestful(name string) (string, error) {
@@ -71,9 +77,7 @@ func getCoinIDByRestful(name string) (string, error) {
 }
 
 func fetchMarketDataRestful(id string) ([]map[string]interface{}, error) {
-	// Convert name to lowercase ID format for CoinGecko (e.g., "Bitcoin" -> "bitcoin")
 
-	// Use 'ids' parameter with proper coin ID
 	url := fmt.Sprintf("https://api.coingecko.com/api/v3/coins/markets?vs_currency=eur&ids=%s", id)
 
 	req, err := http.NewRequest("GET", url, nil)
@@ -102,45 +106,9 @@ func fetchMarketDataRestful(id string) ([]map[string]interface{}, error) {
 	return coins, nil
 }
 
-// func coinHandler(w http.ResponseWriter, r *http.Request) {
-// 	// Allow cross-origin requests
-// 	w.Header().Set("Access-Control-Allow-Origin", "*")
-// 	w.Header().Set("Access-Control-Allow-Methods", "GET")
-// 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
-// 	if r.Method == "OPTIONS" {
-// 		// Pre-flight request for CORS
-// 		w.WriteHeader(http.StatusOK)
-// 		return
-// 	}
-
-// 	name := r.URL.Query().Get("name")
-// 	if name == "" {
-// 		http.Error(w, "Missing 'name' query parameter", http.StatusBadRequest)
-// 		return
-// 	}
-
-// 	id, err := getCoinIDByRestful(name)
-// 	if err != nil {
-// 		http.Error(w, err.Error(), http.StatusNotFound)
-// 		return
-// 	}
-
-// 	data, err := fetchMarketDataRestful(id)
-// 	if err != nil {
-// 		http.Error(w, err.Error(), http.StatusInternalServerError)
-// 		return
-// 	}
-
-// 	w.Header().Set("Content-Type", "application/json")
-// 	json.NewEncoder(w).Encode(data)
-// }
-
 type Database struct {
-	Conn        *sql.DB
-	lastUpdated map[string]time.Time
-	mu          sync.Mutex
-	updateLocks map[string]*sync.Mutex
+	Conn *sql.DB
+	mu   sync.Mutex
 }
 
 func InitDatabase() *Database {
@@ -222,26 +190,22 @@ func InitDatabase() *Database {
 
 	// Return the database connection
 	return &Database{
-		Conn:        db,
-		lastUpdated: make(map[string]time.Time),
-		updateLocks: make(map[string]*sync.Mutex),
+		Conn: db,
 	}
-}
-
-func (db *Database) getUpdateLock(name string) *sync.Mutex {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	lock, exists := db.updateLocks[name]
-	if !exists {
-		lock = &sync.Mutex{}
-		db.updateLocks[name] = lock
-	}
-	return lock
 }
 
 // Insert coin details into DB
 func (db *Database) InsertOrUpdateCoin(c Coin) error {
+	var roiJSON *string
+	if c.Roi != nil {
+		roiBytes, err := json.Marshal(c.Roi)
+		if err != nil {
+			return fmt.Errorf("failed to marshal ROI: %v", err)
+		}
+		roiStr := string(roiBytes)
+		roiJSON = &roiStr
+	}
+
 	query := `
     INSERT INTO coins (
         id, symbol, name, image, current_price, market_cap, market_cap_rank,
@@ -292,7 +256,7 @@ func (db *Database) InsertOrUpdateCoin(c Coin) error {
 		c.PriceChange24h, c.PriceChangePercentage24h, c.MarketCapChange24h,
 		c.MarketCapChangePct24h, c.CirculatingSupply, c.TotalSupply,
 		c.MaxSupply, c.Ath, c.AthChangePercentage, c.AthDate, c.Atl,
-		c.AtlChangePercentage, c.AtlDate, c.Roi, c.LastUpdated,
+		c.AtlChangePercentage, c.AtlDate, roiJSON, c.LastUpdated,
 	)
 
 	return err
@@ -313,14 +277,30 @@ func (db *Database) GetCoinByName(name string) (*Coin, error) {
 	`
 
 	var c Coin
+	var roiStr sql.NullString
+	var maxSupply sql.NullFloat64
+
 	err := db.Conn.QueryRow(query, name).Scan(
 		&c.ID, &c.Symbol, &c.Name, &c.Image, &c.CurrentPrice, &c.MarketCap, &c.MarketCapRank,
 		&c.FullyDilutedValuation, &c.TotalVolume, &c.High24h, &c.Low24h,
 		&c.PriceChange24h, &c.PriceChangePercentage24h, &c.MarketCapChange24h,
 		&c.MarketCapChangePct24h, &c.CirculatingSupply, &c.TotalSupply,
-		&c.MaxSupply, &c.Ath, &c.AthChangePercentage, &c.AthDate, &c.Atl,
-		&c.AtlChangePercentage, &c.AtlDate, &c.Roi, &c.LastUpdated,
+		&maxSupply, &c.Ath, &c.AthChangePercentage, &c.AthDate, &c.Atl,
+		&c.AtlChangePercentage, &c.AtlDate, &roiStr, &c.LastUpdated,
 	)
+
+	if maxSupply.Valid {
+		c.MaxSupply = &maxSupply.Float64
+	}
+
+	if roiStr.Valid {
+		var roi Roi
+		if err := json.Unmarshal([]byte(roiStr.String), &roi); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal ROI: %v", err)
+		}
+		c.Roi = &roi
+	}
+
 	if err == sql.ErrNoRows {
 		return nil, nil // Not found
 	}
@@ -352,116 +332,53 @@ func (db *Database) coinHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 🔒 Acquire per-coin lock
-	updateLock := db.getUpdateLock(name)
-	updateLock.Lock()
-	defer updateLock.Unlock()
-
-	shouldUpdate := false
-
-	// 🔁 Check/update rate-limiting
-	db.mu.Lock()
-	lastTime, exists := db.lastUpdated[name]
-	if !exists || time.Since(lastTime) > 10*time.Minute {
-		shouldUpdate = true
-		db.lastUpdated[name] = time.Now()
-	}
-	db.mu.Unlock()
-
-	if shouldUpdate {
-		id, err := getCoinIDByRestful(name)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
-			return
+	// Try fetching and updating coin info
+	if id, err := getCoinIDByRestful(name); err == nil {
+		if marketData, err := fetchMarketDataRestful(id); err == nil {
+			if len(marketData) > 0 {
+				if jsonData, err := json.Marshal(marketData[0]); err == nil {
+					var coin Coin
+					if err := json.Unmarshal(jsonData, &coin); err == nil {
+						if err := db.InsertOrUpdateCoin(coin); err != nil {
+							log.Printf("DB insert/update error: %v", err)
+						}
+					} else {
+						log.Printf("Unmarshal error: %v", err)
+					}
+				} else {
+					log.Printf("Marshal error: %v", err)
+				}
+			} else {
+				log.Printf("Market data is empty for: %s", name)
+			}
+		} else {
+			log.Printf("fetchMarketDataRestful error: %v", err)
 		}
-
-		marketData, err := fetchMarketDataRestful(id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		if len(marketData) == 0 {
-			http.Error(w, "No market data found", http.StatusNotFound)
-			return
-		}
-
-		jsonData, err := json.Marshal(marketData[0])
-		if err != nil {
-			http.Error(w, "Failed to process market data", http.StatusInternalServerError)
-			return
-		}
-
-		var coin Coin
-		if err := json.Unmarshal(jsonData, &coin); err != nil {
-			http.Error(w, "Failed to parse market data", http.StatusInternalServerError)
-			return
-		}
-
-		if err := db.InsertOrUpdateCoin(coin); err != nil {
-			log.Printf("DB insert/update error: %v", err)
-		}
+	} else {
+		log.Printf("getCoinIDByRestful error: %v", err)
 	}
 
-	// ✅ Now it's safe to read from the DB after any update
-	coin, err := db.GetCoinByName(name)
+	// Always attempt DB read
+	dbCoin, err := db.GetCoinByName(name)
 	if err != nil {
 		http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if coin == nil {
+	if dbCoin == nil {
 		http.Error(w, "Coin not found", http.StatusNotFound)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(coin); err != nil {
-		log.Printf("Error encoding response: %v", err)
+	if err := json.NewEncoder(w).Encode(dbCoin); err != nil {
+		log.Printf("JSON encode error: %v", err)
 	}
-}
-
-func (db *Database) GetCoinByNameHandler(w http.ResponseWriter, r *http.Request) {
-	// CORS headers
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
-	if r.Method == "OPTIONS" {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
-	if r.Method != "GET" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	name := r.URL.Query().Get("name")
-	if name == "" {
-		http.Error(w, "Missing 'name' query parameter", http.StatusBadRequest)
-		return
-	}
-
-	coin, err := db.GetCoinByName(name)
-	if err != nil {
-		http.Error(w, "Database error: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if coin == nil {
-		http.Error(w, "Coin not found", http.StatusNotFound)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(coin)
 }
 
 func main() {
 	db := InitDatabase()
 
 	http.HandleFunc("/manageCoin", db.coinHandler)
-	// http.HandleFunc("/insertCoinDB", db.InsertCoinHandler)
-	http.HandleFunc("/getCoinDB", db.GetCoinByNameHandler)
 
 	fmt.Println("Server running on http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
